@@ -1,0 +1,11 @@
+C:\Personal\Int.Prep\repos\IplStore\src\IplStore.Domain\bin\Debug\net10.0\IplStore.Domain.deps.json
+C:\Personal\Int.Prep\repos\IplStore\src\IplStore.Domain\bin\Debug\net10.0\IplStore.Domain.dll
+C:\Personal\Int.Prep\repos\IplStore\src\IplStore.Domain\bin\Debug\net10.0\IplStore.Domain.pdb
+C:\Personal\Int.Prep\repos\IplStore\src\IplStore.Domain\obj\Debug\net10.0\IplStore.Domain.GeneratedMSBuildEditorConfig.editorconfig
+C:\Personal\Int.Prep\repos\IplStore\src\IplStore.Domain\obj\Debug\net10.0\IplStore.Domain.AssemblyInfoInputs.cache
+C:\Personal\Int.Prep\repos\IplStore\src\IplStore.Domain\obj\Debug\net10.0\IplStore.Domain.AssemblyInfo.cs
+C:\Personal\Int.Prep\repos\IplStore\src\IplStore.Domain\obj\Debug\net10.0\IplStore.Domain.csproj.CoreCompileInputs.cache
+C:\Personal\Int.Prep\repos\IplStore\src\IplStore.Domain\obj\Debug\net10.0\IplStore.Domain.dll
+C:\Personal\Int.Prep\repos\IplStore\src\IplStore.Domain\obj\Debug\net10.0\refint\IplStore.Domain.dll
+C:\Personal\Int.Prep\repos\IplStore\src\IplStore.Domain\obj\Debug\net10.0\IplStore.Domain.pdb
+C:\Personal\Int.Prep\repos\IplStore\src\IplStore.Domain\obj\Debug\net10.0\ref\IplStore.Domain.dll

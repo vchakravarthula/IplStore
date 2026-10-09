@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/IplStore.Api/IplStore.Api.csproj" />
+    <Project Path="src/IplStore.Application/IplStore.Application.csproj" />
+    <Project Path="src/IplStore.Domain/IplStore.Domain.csproj" />
+    <Project Path="src/IplStore.Infrastructure/IplStore.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/IplStore.IntegrationTests/IplStore.IntegrationTests.csproj" />
+    <Project Path="tests/IplStore.UnitTests/IplStore.UnitTests.csproj" />
+  </Folder>
+</Solution>
