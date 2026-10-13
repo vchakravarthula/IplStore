@@ -1,11 +1,7 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Text;
+namespace IplStore.Application.Common.Interfaces;
 
-namespace IplStore.Application.Common.Interfaces
+public interface IMessagePublisher
 {
-    public interface IMessagePublisher
-    {
-        Task PublishAsync<T>(string queueName, T message, CancellationToken ct = default) where T : class;
-    }
+    /// <summary>Publishes an already-serialized JSON payload. Must THROW if the broker did not confirm the message.</summary>
+    Task PublishAsync(string queueName, string payload, CancellationToken ct = default);
 }

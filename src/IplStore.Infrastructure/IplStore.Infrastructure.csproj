@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
@@ -9,10 +9,14 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.12" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.12" />
+    <!-- Sqlite is a supported provider (Persistence:Provider=Sqlite) for zero-install local runs and fast tests. -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.12" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.12" />
+    <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.12" />
+    <!-- Floating on purpose: this package's version line differs from the 10.0.x runtime packages. Pin it after the first restore. -->
+    <PackageReference Include="Microsoft.Extensions.Http.Resilience" Version="10.*" />
     <PackageReference Include="Microsoft.Extensions.Options.DataAnnotations" Version="10.0.12" />
     <PackageReference Include="RabbitMQ.Client" Version="6.8.1" />
-    <PackageReference Include="Razorpay" Version="3.3.2" />
     <PackageReference Include="StackExchange.Redis" Version="3.3.1" />
   </ItemGroup>
 

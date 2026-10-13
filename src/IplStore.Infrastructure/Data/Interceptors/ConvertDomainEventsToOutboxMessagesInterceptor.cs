@@ -1,44 +1,48 @@
-﻿using IplStore.Domain.Common;
-using IplStore.Domain.Entities;
+using System.Text.Json;
+using IplStore.Domain.Common;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
-using System;
-using System.Collections.Generic;
-using System.Text;
-using System.Text.Json;
 
-namespace IplStore.Infrastructure.Data.Interceptors
+namespace IplStore.Infrastructure.Data.Interceptors;
+
+/// <summary>
+/// Transactional outbox: domain events raised by aggregates are written as OutboxMessage rows inside the SAME
+/// SaveChanges (same transaction) as the state change. Either both commit or neither does.
+/// </summary>
+public class ConvertDomainEventsToOutboxMessagesInterceptor : SaveChangesInterceptor
 {
-    public class ConvertDomainEventsToOutboxMessagesInterceptor : SaveChangesInterceptor
+    public override InterceptionResult<int> SavingChanges(DbContextEventData eventData, InterceptionResult<int> result)
     {
-        public override ValueTask<InterceptionResult<int>> SavingChangesAsync(
-        DbContextEventData eventData,
-        InterceptionResult<int> result,
-        CancellationToken cancellationToken = default)
+        Convert(eventData.Context);
+        return base.SavingChanges(eventData, result);
+    }
+
+    public override ValueTask<InterceptionResult<int>> SavingChangesAsync(
+        DbContextEventData eventData, InterceptionResult<int> result, CancellationToken cancellationToken = default)
+    {
+        Convert(eventData.Context);
+        return base.SavingChangesAsync(eventData, result, cancellationToken);
+    }
+
+    private static void Convert(DbContext? db)
+    {
+        if (db is null) return;
+
+        var aggregates = db.ChangeTracker.Entries<Entity>()
+            .Select(e => e.Entity)
+            .Where(e => e.DomainEvents.Count > 0)
+            .ToList();
+
+        foreach (var aggregate in aggregates)
         {
-            DbContext? dbContext = eventData.Context;
-
-            if (dbContext is null)
+            foreach (var domainEvent in aggregate.DomainEvents)
             {
-                return base.SavingChangesAsync(eventData, result, cancellationToken);
+                // Serialize by the RUNTIME type; serializing via the interface would drop every event property.
+                var payload = JsonSerializer.Serialize(domainEvent, domainEvent.GetType());
+                db.Set<OutboxMessage>().Add(new OutboxMessage(domainEvent.GetType().Name, payload));
             }
 
-            // Intercept pending outbox operations or transactional events
-            var outboxMessages = dbContext.ChangeTracker
-                .Entries<Order>()
-                .Where(e => e.State == Microsoft.EntityFrameworkCore.EntityState.Added)
-                .Select(e => new OutboxMessage(
-                    eventType: "OrderCreated",
-                    payload: JsonSerializer.Serialize(new { OrderId = e.Entity.Id, e.Entity.UserId, e.Entity.TotalAmount })
-                ))
-                .ToList();
-
-            if (outboxMessages.Any())
-            {
-                dbContext.Set<OutboxMessage>().AddRange(outboxMessages);
-            }
-
-            return base.SavingChangesAsync(eventData, result, cancellationToken);
+            aggregate.ClearDomainEvents();
         }
     }
 }

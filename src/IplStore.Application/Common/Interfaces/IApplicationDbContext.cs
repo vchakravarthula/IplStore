@@ -1,29 +1,19 @@
-﻿using IplStore.Domain.Common;
 using IplStore.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Microsoft.EntityFrameworkCore.Infrastructure;
-using System;
-using System.Collections.Generic;
-using System.Text;
 
-namespace IplStore.Application.Common.Interfaces
+namespace IplStore.Application.Common.Interfaces;
+
+public interface IApplicationDbContext
 {
-    public interface IApplicationDbContext
-    {
-        DbSet<Franchise> Franchises { get; }
-        DbSet<Category> Categories { get; }
-        DbSet<Product> Products { get; }
-        DbSet<Cart> Carts { get; }
-        DbSet<CartItem> CartItems { get; }
-        DbSet<Order> Orders { get; }
-        DbSet<OrderItem> OrderItems { get; }
-        DbSet<OutboxMessage> OutboxMessages { get; }
+    DbSet<Franchise> Franchises { get; }
+    DbSet<Category> Categories { get; }
+    DbSet<Product> Products { get; }
+    DbSet<Order> Orders { get; }
 
-        DatabaseFacade Database { get; } 
+    DatabaseFacade Database { get; }
+    ChangeTracker ChangeTracker { get; }
 
-        ChangeTracker ChangeTracker { get; }
-
-        Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
-    }
+    Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

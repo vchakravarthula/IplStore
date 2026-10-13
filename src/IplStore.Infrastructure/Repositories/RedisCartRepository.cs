@@ -1,91 +1,97 @@
-﻿using IplStore.Application.Common.Interfaces;
-using IplStore.Domain.Common;
-using IplStore.Domain.Entities;
+using IplStore.Application.Common.Exceptions;
+using IplStore.Application.Common.Interfaces;
 using StackExchange.Redis;
-using System;
-using System.Collections.Generic;
-using System.Text;
-using System.Text.Json;
-using System.Text.Json.Serialization;
 
-namespace IplStore.Infrastructure.Repositories
+namespace IplStore.Infrastructure.Repositories;
+
+/// <summary>
+/// One Redis hash per user: key "cart:{userId}", field = productId, value = quantity.
+/// Every mutation is a single atomic Redis command (or Lua script), so concurrent adds from two tabs or two
+/// API nodes cannot lose updates, and the cart survives any API node dying.
+/// </summary>
+public sealed class RedisCartRepository : ICartRepository
 {
-    public class RedisCartRepository : ICartRepository
-    {
-        private readonly IConnectionMultiplexer _redis;
-        private readonly IDatabase _db;
-        private static readonly TimeSpan CartExpiry = TimeSpan.FromDays(7);
-        private static readonly JsonSerializerOptions JsonOptions = new()
+    private static readonly TimeSpan CartTtl = TimeSpan.FromDays(7);
+
+    // Atomic "add with cap": read, check the cap, write and refresh the TTL in one server-side step.
+    private static readonly LuaScript AddScript = LuaScript.Prepare(@"
+        local current = tonumber(redis.call('HGET', @key, @field) or '0')
+        local nxt = current + tonumber(@delta)
+        if nxt > tonumber(@max) then return -1 end
+        redis.call('HSET', @key, @field, nxt)
+        redis.call('EXPIRE', @key, @ttl)
+        return nxt");
+
+    private readonly IConnectionMultiplexer _redis;
+
+    public RedisCartRepository(IConnectionMultiplexer redis) => _redis = redis;
+
+    public Task<IReadOnlyList<CartLine>> GetAsync(string userId, CancellationToken ct = default) =>
+        GuardAsync(async () =>
         {
-            PropertyNameCaseInsensitive = true,
-            IncludeFields = true,
-            UnmappedMemberHandling = JsonUnmappedMemberHandling.Skip,
-            // Tells System.Text.Json to use parameterless non-public constructors
-            PreferredObjectCreationHandling = JsonObjectCreationHandling.Populate
-        };
+            var entries = await _redis.GetDatabase().HashGetAllAsync(Key(userId));
 
-        public RedisCartRepository(IConnectionMultiplexer redis)
-        {
-            _redis = redis;
-            _db = redis.GetDatabase();
-        }
-        private static string GetKey(string userId) => $"cart:{userId}";
-
-        public async Task<Cart?> GetByUserIdAsync(string userId, CancellationToken ct = default)
-        {
-            var key = GetKey(userId);
-            var entries = await _db.HashGetAllAsync(key);
-
-            if (entries.Length == 0) return null;
-
-            var snapshots = new List<CartItem>();
-
+            var lines = new List<CartLine>(entries.Length);
             foreach (var entry in entries)
             {
-                if (!entry.Value.IsNullOrEmpty)
-                {
-                    var snapshot = JsonSerializer.Deserialize<CartItem>((string)entry.Value!, JsonOptions);
-                    if (snapshot is not null)
-                    {
-                        snapshots.Add(snapshot);
-                    }
-                }
+                if (Guid.TryParse(entry.Name.ToString(), out var productId) && (int)entry.Value > 0)
+                    lines.Add(new CartLine(productId, (int)entry.Value));
             }
 
-            return Cart.Rehydrate(userId, snapshots);
-        }
+            return (IReadOnlyList<CartLine>)lines;
+        });
 
-        public async Task SaveCartAsync(Cart cart, CancellationToken ct = default)
+    public Task<int?> AddAsync(string userId, Guid productId, int quantity, int maxPerItem, CancellationToken ct = default) =>
+        GuardAsync(async () =>
         {
-            var key = GetKey(cart.UserId);
-
-            if (!cart.Items.Any())
+            var result = await _redis.GetDatabase().ScriptEvaluateAsync(AddScript, new
             {
-                await DeleteCartAsync(cart.UserId, ct);
-                return;
-            }
+                key = (RedisKey)Key(userId),
+                field = productId.ToString(),
+                delta = quantity,
+                max = maxPerItem,
+                ttl = (int)CartTtl.TotalSeconds
+            });
 
-            // Convert cart items to atomic Redis Hash entries
-            var hashEntries = cart.Items.Select(item => new HashEntry(
-                item.ProductId.ToString(),
-                JsonSerializer.Serialize(new CartItem(item.CartId, item.ProductId, item.Quantity, item.UnitPrice), JsonOptions)
-            )).ToArray();
+            var value = (int)result;
+            return value < 0 ? (int?)null : value;
+        });
 
-            var batch = _db.CreateBatch();
-            _ = batch.HashSetAsync(key, hashEntries);
-            _ = batch.KeyExpireAsync(key, CartExpiry);
-            batch.Execute();
-        }
-
-        public async Task RemoveItemAsync(string userId, Guid productId, CancellationToken ct = default)
+    public Task SetQuantityAsync(string userId, Guid productId, int quantity, CancellationToken ct = default) =>
+        GuardAsync(async () =>
         {
-            var key = GetKey(userId);
-            await _db.HashDeleteAsync(key, productId.ToString());
-        }
+            var db = _redis.GetDatabase();
+            await db.HashSetAsync(Key(userId), productId.ToString(), quantity);
+            await db.KeyExpireAsync(Key(userId), CartTtl);
+            return true;
+        });
 
-        public async Task DeleteCartAsync(string userId, CancellationToken ct = default)
+    public Task RemoveAsync(string userId, Guid productId, CancellationToken ct = default) =>
+        GuardAsync(async () =>
         {
-            await _db.KeyDeleteAsync(GetKey(userId));
-        }   
+            await _redis.GetDatabase().HashDeleteAsync(Key(userId), productId.ToString());
+            return true;
+        });
+
+    public Task ClearAsync(string userId, CancellationToken ct = default) =>
+        GuardAsync(async () =>
+        {
+            await _redis.GetDatabase().KeyDeleteAsync(Key(userId));
+            return true;
+        });
+
+    private static string Key(string userId) => $"cart:{userId}";
+
+    // Connection/timeout failures become a 503 with Retry-After instead of a generic 500.
+    private static async Task<T> GuardAsync<T>(Func<Task<T>> operation)
+    {
+        try
+        {
+            return await operation();
+        }
+        catch (Exception ex) when (ex is RedisConnectionException or RedisTimeoutException)
+        {
+            throw new DependencyUnavailableException("Cart store", ex);
+        }
     }
 }

@@ -5,6 +5,7 @@ C:\Personal\Int.Prep\repos\IplStore\src\IplStore.Domain\obj\Debug\net10.0\IplSto
 C:\Personal\Int.Prep\repos\IplStore\src\IplStore.Domain\obj\Debug\net10.0\IplStore.Domain.AssemblyInfoInputs.cache
 C:\Personal\Int.Prep\repos\IplStore\src\IplStore.Domain\obj\Debug\net10.0\IplStore.Domain.AssemblyInfo.cs
 C:\Personal\Int.Prep\repos\IplStore\src\IplStore.Domain\obj\Debug\net10.0\IplStore.Domain.csproj.CoreCompileInputs.cache
+C:\Personal\Int.Prep\repos\IplStore\src\IplStore.Domain\obj\Debug\net10.0\IplStore.Domain.sourcelink.json
 C:\Personal\Int.Prep\repos\IplStore\src\IplStore.Domain\obj\Debug\net10.0\IplStore.Domain.dll
 C:\Personal\Int.Prep\repos\IplStore\src\IplStore.Domain\obj\Debug\net10.0\refint\IplStore.Domain.dll
 C:\Personal\Int.Prep\repos\IplStore\src\IplStore.Domain\obj\Debug\net10.0\IplStore.Domain.pdb

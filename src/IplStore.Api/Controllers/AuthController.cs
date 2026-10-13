@@ -1,81 +1,66 @@
-﻿using IplStore.Infrastructure.Data.Configurations;
+using System.Security.Claims;
+using IplStore.Infrastructure.Options;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
+using Microsoft.IdentityModel.JsonWebTokens;
 using Microsoft.IdentityModel.Tokens;
-using System.IdentityModel.Tokens.Jwt;
-using System.Security.Claims;
 using System.Text;
 
-namespace IplStore.Api.Controllers
+namespace IplStore.Api.Controllers;
+
+public sealed record TokenRequest(string Username);
+
+/// <summary>
+/// DEVELOPMENT-ONLY token issuer for the demo's two seeded users. It returns 404 in any other environment.
+/// Production: this controller is replaced by Microsoft Entra External ID (OIDC); the API only validates tokens,
+/// so nothing else in the system changes.
+/// </summary>
+[ApiController]
+[AllowAnonymous]
+[Route("api/auth")]
+public sealed class AuthController : ControllerBase
 {
-    [ApiController]
-    [Route("api/[controller]")]
-    public class AuthController : ControllerBase
-    {
-        private readonly JwtSettings _jwtSettings;
-        private readonly IHostEnvironment _environment;
-
-        // Hardcoded whitelist of seeded demo users allowed for local development testing
-        private static readonly Dictionary<string, (string UserId, string Email, string Role)> SeededDemoUsers = new(StringComparer.OrdinalIgnoreCase)
-    {
-        { "admin", ("demo-admin-001", "admin@iplstore.com", "Admin") },
-        { "customer", ("demo-customer-001", "customer@iplstore.com", "Customer") }
-    };
-
-        public AuthController(IOptions<JwtSettings> jwtOptions, IHostEnvironment hostEnvironment)
+    // Roles are decided by the server from this table; the caller can never ask for one.
+    private static readonly Dictionary<string, (string UserId, string Role, string Email)> SeededUsers =
+        new(StringComparer.OrdinalIgnoreCase)
         {
-            _jwtSettings = jwtOptions.Value;
-            _environment = hostEnvironment;
-        }
+            ["customer"] = ("customer-1", "Customer", "customer@iplstore.local"),
+            ["admin"] = ("admin-1", "Admin", "admin@iplstore.local")
+        };
 
-        [AllowAnonymous]
-        [HttpPost("token")]
-        public IActionResult GenerateDemoToken([FromBody] TokenRequest request)
-        {
-            // 1. Restrict endpoint exclusively to Development environment
-            if (!_environment.IsDevelopment())
-            {
-                return NotFound("Demo token generation is disabled in non-development environments.");
-            }
+    private readonly JwtSettings _jwt;
+    private readonly IWebHostEnvironment _environment;
 
-            // 2. Validate requested user against whitelisted seeded demo users
-            if (string.IsNullOrWhiteSpace(request.UserId) || !SeededDemoUsers.TryGetValue(request.UserId, out var demoUser))
-            {
-                return BadRequest(new { Message = "Invalid demo user. Allowed users: 'admin', 'customer'." });
-            }
-
-            // 3. Mint JWT using strictly white-listed identity claims
-            var tokenHandler = new JwtSecurityTokenHandler();
-            var key = Encoding.UTF8.GetBytes(_jwtSettings.Secret);
-
-            var tokenDescriptor = new SecurityTokenDescriptor
-            {
-                Subject = new ClaimsIdentity(new[]
-                {
-                new Claim(ClaimTypes.NameIdentifier, demoUser.UserId),
-                new Claim(JwtRegisteredClaimNames.Sub, demoUser.UserId),
-                new Claim(JwtRegisteredClaimNames.Email, demoUser.Email),
-                new Claim(ClaimTypes.Role, demoUser.Role)
-            }),
-                Expires = DateTime.UtcNow.AddHours(2),
-                Issuer = _jwtSettings.Issuer,
-                Audience = _jwtSettings.Audience,
-                SigningCredentials = new SigningCredentials(new SymmetricSecurityKey(key), SecurityAlgorithms.HmacSha256Signature)
-            };
-
-            var token = tokenHandler.CreateToken(tokenDescriptor);
-            var tokenString = tokenHandler.WriteToken(token);
-
-            return Ok(new
-            {
-                Token = tokenString,
-                UserId = demoUser.UserId,
-                Role = demoUser.Role,
-                ExpiresInMinutes = 120
-            });
-        }
+    public AuthController(IOptions<JwtSettings> jwt, IWebHostEnvironment environment)
+    {
+        _jwt = jwt.Value;
+        _environment = environment;
     }
 
-    public record TokenRequest(string UserId, string Email, string? Role);
+    [HttpPost("token")]
+    public IActionResult IssueToken([FromBody] TokenRequest request)
+    {
+        if (!_environment.IsDevelopment()) return NotFound();
+        if (!SeededUsers.TryGetValue(request.Username ?? string.Empty, out var user)) return NotFound("Unknown demo user.");
+
+        var descriptor = new SecurityTokenDescriptor
+        {
+            // Raw claim names ("sub", "role"): the JWT bearer setup uses MapInboundClaims = false.
+            Subject = new ClaimsIdentity(new[]
+            {
+                new Claim("sub", user.UserId),
+                new Claim("email", user.Email),
+                new Claim("role", user.Role)
+            }),
+            Issuer = _jwt.Issuer,
+            Audience = _jwt.Audience,
+            Expires = DateTime.UtcNow.AddMinutes(_jwt.ExpiryMinutes),
+            SigningCredentials = new SigningCredentials(
+                new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_jwt.Secret)), SecurityAlgorithms.HmacSha256)
+        };
+
+        var token = new JsonWebTokenHandler().CreateToken(descriptor);
+        return Ok(new { accessToken = token, tokenType = "Bearer", expiresInMinutes = _jwt.ExpiryMinutes, role = user.Role });
+    }
 }

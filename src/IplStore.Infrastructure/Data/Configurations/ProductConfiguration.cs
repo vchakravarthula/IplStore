@@ -1,40 +1,29 @@
-﻿using IplStore.Domain.Entities;
+using IplStore.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.ChangeTracking;
-using System;
-using System.Collections.Generic;
-using System.Text;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
-namespace IplStore.Infrastructure.Data.Configurations
+namespace IplStore.Infrastructure.Data.Configurations;
+
+public class ProductConfiguration : IEntityTypeConfiguration<Product>
 {
-    public class ProductConfiguration : IEntityTypeConfiguration<Product>
+    public void Configure(EntityTypeBuilder<Product> builder)
     {
-        public void Configure(EntityTypeBuilder<Product> builder)
-        {
-            builder.HasKey(p => p.Id);
+        builder.HasKey(p => p.Id);
+        builder.Property(p => p.Name).HasMaxLength(150).IsRequired();
+        builder.Property(p => p.SKU).HasMaxLength(50).IsRequired();
+        builder.Property(p => p.Description).HasMaxLength(2000);
+        builder.Property(p => p.ImageUrl).HasMaxLength(500);
+        builder.Property(p => p.Price).HasPrecision(18, 2).IsRequired();
+        builder.Property(p => p.StockQuantity).IsRequired();
 
-            builder.Property(p => p.Name).HasMaxLength(150).IsRequired();
-            builder.Property(p => p.SKU).HasMaxLength(50).IsRequired();
-            builder.HasIndex(p => p.SKU).IsUnique();
+        // IsRowVersion() already implies a concurrency token. Guards admin edits made via the tracked entity.
+        builder.Property(p => p.RowVersion).IsRowVersion();
 
-            builder.Property(p => p.Price).HasPrecision(18, 2).IsRequired();
-            builder.Property(p => p.StockQuantity).IsRequired();
+        builder.HasIndex(p => p.SKU).IsUnique();
+        builder.HasIndex(p => p.Name);                                // catalog search + default sort
+        builder.HasIndex(p => new { p.FranchiseId, p.CategoryId });   // catalog filters
 
-            // SQL Server RowVersion for Optimistic Concurrency Control during peak spike
-            builder.Property(p => p.RowVersion)
-                   .IsRowVersion()
-                   .IsConcurrencyToken();
-
-            builder.HasOne<Franchise>()
-                   .WithMany()
-                   .HasForeignKey(p => p.FranchiseId)
-                   .OnDelete(DeleteBehavior.Restrict);
-
-            builder.HasOne<Category>()
-                   .WithMany()
-                   .HasForeignKey(p => p.CategoryId)
-                   .OnDelete(DeleteBehavior.Restrict);
-        }
+        builder.HasOne<Franchise>().WithMany().HasForeignKey(p => p.FranchiseId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne<Category>().WithMany().HasForeignKey(p => p.CategoryId).OnDelete(DeleteBehavior.Restrict);
     }
 }

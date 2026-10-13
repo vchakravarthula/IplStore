@@ -1,1 +1,6 @@
-{ }
+{
+  "IplStore.Api, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null": "C:\\Personal\\Int.Prep\\repos\\IplStore\\src\\IplStore.Api",
+  "IplStore.Application, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null": "C:\\Personal\\Int.Prep\\repos\\IplStore\\src\\IplStore.Application",
+  "IplStore.Domain, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null": "C:\\Personal\\Int.Prep\\repos\\IplStore\\src\\IplStore.Domain",
+  "IplStore.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null": "C:\\Personal\\Int.Prep\\repos\\IplStore\\src\\IplStore.Infrastructure"
+}

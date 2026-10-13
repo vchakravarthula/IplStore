@@ -1,82 +1,70 @@
-﻿using IplStore.Application.Common.Interfaces;
-using Microsoft.EntityFrameworkCore.Metadata;
+using System.Text;
+using IplStore.Application.Common.Interfaces;
 using Microsoft.Extensions.Configuration;
 using RabbitMQ.Client;
-using System;
-using System.Collections.Generic;
-using System.Text;
-using System.Text.Json;
-using System.Threading;
-using System.Threading.Tasks;
 
-namespace IplStore.Infrastructure.Messaging
+namespace IplStore.Infrastructure.Messaging;
+
+/// <summary>
+/// Publishes with publisher confirms: PublishAsync returns only after the broker has accepted the message and
+/// THROWS otherwise. The outbox relies on that contract: a swallowed failure here would mark the message as sent
+/// and lose it.
+/// </summary>
+public sealed class RabbitMqPublisher : IMessagePublisher, IDisposable
 {
-    public class RabbitMqPublisher : IMessagePublisher, IDisposable
+    private readonly IConnection _connection;
+    private readonly IModel _channel;
+    private readonly HashSet<string> _declaredQueues = new();
+    private readonly object _gate = new();   // IModel is not thread-safe
+
+    public RabbitMqPublisher(IConfiguration configuration)
     {
-        private RabbitMQ.Client.IConnection? _connection;
-        private RabbitMQ.Client.IModel _channel;
-        private readonly ConnectionFactory _factory;
-        private readonly SemaphoreSlim _semaphore = new(1, 1);
-
-        public RabbitMqPublisher(IConfiguration configuration)
+        var factory = new ConnectionFactory
         {
-            _factory = new ConnectionFactory
-            {
-                HostName = configuration["RabbitMQ:Host"] ?? "localhost",
-                Port = int.Parse(configuration["RabbitMQ:Port"] ?? "5672"),
-                UserName = configuration["RabbitMQ:Username"] ?? "guest",
-                Password = configuration["RabbitMQ:Password"] ?? "guest"
-            };
+            HostName = Required(configuration, "RabbitMQ:Host"),
+            Port = configuration.GetValue("RabbitMQ:Port", 5672),
+            UserName = Required(configuration, "RabbitMQ:Username"),
+            Password = Required(configuration, "RabbitMQ:Password"),
+            AutomaticRecoveryEnabled = true
+        };
 
-            // Allow exceptions to throw during creation so callers know connection failed
-            _connection = _factory.CreateConnection();
-            _channel = _connection.CreateModel();
+        _connection = factory.CreateConnection();
+        _channel = _connection.CreateModel();
+        _channel.ConfirmSelect();
+    }
 
-            // Enable Publisher Confirms on channel
-            _channel.ConfirmSelect();
-        }
-
-
-        public Task PublishAsync<T>(string queueName, T message, CancellationToken ct = default) where T : class
+    public Task PublishAsync(string queueName, string payload, CancellationToken ct = default)
+    {
+        lock (_gate)
         {
-            if (_channel is null || _connection is null || !_connection.IsOpen)
+            if (!_connection.IsOpen || _channel.IsClosed)
+                throw new InvalidOperationException("RabbitMQ connection is not open.");
+
+            if (!_declaredQueues.Contains(queueName))
             {
-                throw new InvalidOperationException("RabbitMQ connection or channel is not open.");
+                _channel.QueueDeclare(queueName, durable: true, exclusive: false, autoDelete: false);
+                _declaredQueues.Add(queueName);   // only after a successful declare
             }
-
-            _channel.QueueDeclare(queue: queueName, durable: true, exclusive: false, autoDelete: false, arguments: null);
-
-            byte[] body = message switch
-            {
-                string jsonString => Encoding.UTF8.GetBytes(jsonString),
-                _ => Encoding.UTF8.GetBytes(JsonSerializer.Serialize(message))
-            };
 
             var properties = _channel.CreateBasicProperties();
             properties.Persistent = true;
             properties.ContentType = "application/json";
 
-            _channel.BasicPublish(
-                exchange: string.Empty,
-                routingKey: queueName,
-                basicProperties: properties,
-                body: body);
+            _channel.BasicPublish(string.Empty, queueName, properties, Encoding.UTF8.GetBytes(payload));
 
-            // Wait for broker ACK with a 5-second timeout
-            bool confirmed = _channel.WaitForConfirms(TimeSpan.FromSeconds(5));
-
-            if (!confirmed)
-            {
-                throw new InvalidOperationException($"RabbitMQ publisher confirmation failed/NACKed for queue '{queueName}'.");
-            }
-
-            return Task.CompletedTask;
+            if (!_channel.WaitForConfirms(TimeSpan.FromSeconds(5)))
+                throw new InvalidOperationException($"RabbitMQ did not confirm the message for queue '{queueName}'.");
         }
 
-        public void Dispose()
-        {
-            _channel?.Close();
-            _connection?.Close();
-        }
+        return Task.CompletedTask;
     }
+
+    public void Dispose()
+    {
+        _channel.Dispose();
+        _connection.Dispose();
+    }
+
+    private static string Required(IConfiguration configuration, string key) =>
+        configuration[key] ?? throw new InvalidOperationException($"Configuration value '{key}' is required.");
 }

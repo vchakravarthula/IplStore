@@ -1,69 +1,78 @@
-﻿using IplStore.Application.Common.Interfaces;
-using IplStore.Infrastructure.Data.Configurations;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Options;
-using Razorpay.Api;
-using System;
-using System.Collections.Generic;
+using System.Net.Http.Headers;
+using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
+using IplStore.Application.Common.Exceptions;
+using IplStore.Application.Common.Interfaces;
+using IplStore.Infrastructure.Options;
+using Microsoft.Extensions.Options;
 
-namespace IplStore.Infrastructure.Services
+namespace IplStore.Infrastructure.Services;
+
+/// <summary>
+/// Razorpay over plain HttpClient (typed client): fully async, traced by the OpenTelemetry HTTP instrumentation,
+/// and wrapped by the resilience pipeline (timeout, retry, circuit breaker) registered in DependencyInjection.
+/// </summary>
+public sealed class RazorpayPaymentGateway : IPaymentGateway
 {
-    public class RazorpayPaymentGateway : IPaymentGateway
+    private readonly HttpClient _http;
+    private readonly RazorpaySettings _settings;
+
+    public RazorpayPaymentGateway(HttpClient http, IOptions<RazorpaySettings> settings)
     {
-        private readonly RazorpaySettings _settings;
+        _http = http;
+        _settings = settings.Value;
 
-        public RazorpayPaymentGateway(IOptions<RazorpaySettings> settings)
+        _http.BaseAddress ??= new Uri("https://api.razorpay.com/");
+        var credentials = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{_settings.KeyId}:{_settings.KeySecret}"));
+        _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", credentials);
+    }
+
+    public async Task<PaymentOrderResult> CreateOrderAsync(PaymentOrderRequest request, CancellationToken ct = default)
+    {
+        // Razorpay wants the smallest currency unit (paise) as an integer. Round, never truncate.
+        var minorUnits = (long)Math.Round(request.Amount * 100m, MidpointRounding.AwayFromZero);
+
+        try
         {
-            _settings = settings.Value;
+            using var response = await _http.PostAsJsonAsync(
+                "v1/orders",
+                new { amount = minorUnits, currency = request.Currency, receipt = request.Receipt },
+                ct);
 
-            if (string.IsNullOrWhiteSpace(_settings.KeyId) || string.IsNullOrWhiteSpace(_settings.KeySecret))
-            {
-                throw new InvalidOperationException("Razorpay credentials are not properly configured.");
-            }
+            var body = await response.Content.ReadAsStringAsync(ct);
+            if (!response.IsSuccessStatusCode)
+                throw new PaymentGatewayException($"Razorpay returned HTTP {(int)response.StatusCode}: {body}");
+
+            using var json = JsonDocument.Parse(body);
+            var id = json.RootElement.GetProperty("id").GetString()
+                     ?? throw new PaymentGatewayException("Razorpay response had no order id.");
+            var status = json.RootElement.TryGetProperty("status", out var s) ? s.GetString() : null;
+
+            return new PaymentOrderResult(id, request.Amount, request.Currency, status ?? "created");
         }
-
-        public void Initialize()
+        catch (Exception ex) when (ex is not PaymentGatewayException && !ct.IsCancellationRequested)
         {
-            // Use injected, validated configuration values without fallbacks
-            var client = new Razorpay.Api.RazorpayClient(_settings.KeyId, _settings.KeySecret);
+            // Network errors, timeouts, open circuit breaker, malformed JSON: one exception type for callers.
+            throw new PaymentGatewayException("Razorpay order creation failed.", ex);
         }
+    }
 
-        public Task<RazorpayOrderResponse> CreatePaymentOrderAsync(RazorpayOrderRequest request, CancellationToken ct = default)
-        {
-            // 1. Fixed: Use validated _settings properties instead of unassigned _key and _secret
-            var client = new RazorpayClient(_settings.KeyId, _settings.KeySecret);
+    public bool VerifySignature(PaymentVerificationRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.GatewayOrderId) ||
+            string.IsNullOrWhiteSpace(request.GatewayPaymentId) ||
+            string.IsNullOrWhiteSpace(request.Signature))
+            return false;
 
-            var options = new Dictionary<string, object>
-        {
-            { "amount", (int)(request.Amount * 100) }, // Razorpay expects amount in paise
-            { "currency", request.Currency },
-            { "receipt", request.ReceiptId },
-            { "payment_capture", 1 }
-        };
+        var payload = Encoding.UTF8.GetBytes($"{request.GatewayOrderId}|{request.GatewayPaymentId}");
+        var expected = Convert.ToHexString(HMACSHA256.HashData(Encoding.UTF8.GetBytes(_settings.KeySecret), payload))
+            .ToLowerInvariant();
 
-            // 2. Wrap synchronous SDK call to prevent blocking thread pool worker threads
-            return Task.Run(() =>
-            {
-                Order order = client.Order.Create(options);
-                var orderId = order["id"].ToString()!;
-                var status = order["status"].ToString()!;
-
-                return new RazorpayOrderResponse(orderId, request.Amount, request.Currency, status);
-            }, ct);
-        }
-
-        public bool VerifyPaymentSignature(RazorpayVerificationRequest request)
-        {
-            var payload = $"{request.RazorpayOrderId}|{request.RazorpayPaymentId}";
-
-            // 3. Fixed: Use _settings.KeySecret for HMACSHA256 signature verification
-            using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(_settings.KeySecret));
-            var hash = hmac.ComputeHash(Encoding.UTF8.GetBytes(payload));
-            var generatedSignature = Convert.ToHexString(hash).ToLowerInvariant();
-
-            return generatedSignature.Equals(request.RazorpaySignature, StringComparison.OrdinalIgnoreCase);
-        }
+        // Constant-time comparison: do not leak how many leading characters matched.
+        return CryptographicOperations.FixedTimeEquals(
+            Encoding.UTF8.GetBytes(expected),
+            Encoding.UTF8.GetBytes(request.Signature.Trim().ToLowerInvariant()));
     }
 }

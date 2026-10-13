@@ -1,16 +1,16 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Text;
+namespace IplStore.Application.Common.Interfaces;
 
-namespace IplStore.Application.Common.Interfaces
+// Provider-neutral contracts: swapping Razorpay for Stripe touches only the Infrastructure implementation.
+public sealed record PaymentOrderRequest(decimal Amount, string Currency, string Receipt);
+
+public sealed record PaymentOrderResult(string GatewayOrderId, decimal Amount, string Currency, string Status);
+
+public sealed record PaymentVerificationRequest(string GatewayOrderId, string GatewayPaymentId, string Signature);
+
+public interface IPaymentGateway
 {
-    public record RazorpayOrderRequest(decimal Amount, string Currency, string ReceiptId);
-    public record RazorpayOrderResponse(string PaymentOrderId, decimal Amount, string Currency, string Status);
-    public record RazorpayVerificationRequest(string RazorpayPaymentId, string RazorpayOrderId, string RazorpaySignature);
+    /// <exception cref="Exceptions.PaymentGatewayException">The provider rejected the call or was unreachable.</exception>
+    Task<PaymentOrderResult> CreateOrderAsync(PaymentOrderRequest request, CancellationToken ct = default);
 
-    public interface IPaymentGateway
-    {
-        Task<RazorpayOrderResponse> CreatePaymentOrderAsync(RazorpayOrderRequest request, CancellationToken ct = default);
-        bool VerifyPaymentSignature(RazorpayVerificationRequest request);
-    }
+    bool VerifySignature(PaymentVerificationRequest request);
 }

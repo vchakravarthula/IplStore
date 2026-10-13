@@ -1,10 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Text;
+namespace IplStore.Domain.Common;
 
-namespace IplStore.Domain.Common
-{
-    public interface IAggregateRoot
-    {
-    }
-}
+/// <summary>Marker for aggregate roots: the only entities handlers load and save directly.</summary>
+public interface IAggregateRoot { }

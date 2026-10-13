@@ -1,4 +1,6 @@
 is_global = true
+build_property.MSBuildProjectFullPath = C:\Personal\Int.Prep\repos\IplStore\tests\IplStore.UnitTests\IplStore.UnitTests.csproj
+build_property.XunitTestProjectAOT = false
 build_property.TargetFramework = net10.0
 build_property.TargetFrameworkIdentifier = .NETCoreApp
 build_property.TargetFrameworkVersion = v10.0

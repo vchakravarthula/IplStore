@@ -1,0 +1,31 @@
+# Local infrastructure only (the API runs from Visual Studio / dotnet run).
+# Credentials below are LOCAL-DEV ONLY. The SQL password comes from .env (see .env.example), never from Git.
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: Developer            # free for development
+      MSSQL_SA_PASSWORD: ${SQL_SA_PASSWORD:?set SQL_SA_PASSWORD in .env}
+    ports: ["1433:1433"]
+    volumes: [sqldata:/var/opt/mssql]
+
+  redis:
+    image: redis:7
+    command: ["redis-server", "--appendonly", "yes"]   # AOF: carts survive a Redis restart
+    ports: ["6379:6379"]
+    volumes: [redisdata:/data]
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports: ["5672:5672", "15672:15672"]                # UI: http://localhost:15672 (guest/guest)
+
+  otel-dashboard:
+    image: mcr.microsoft.com/dotnet/aspire-dashboard:latest
+    environment:
+      DOTNET_DASHBOARD_UNSECURED_ALLOW_ANONYMOUS: "true"
+    ports: ["18888:18888", "4317:18889"]               # UI: http://localhost:18888, OTLP gRPC on 4317
+
+volumes:
+  sqldata:
+  redisdata:

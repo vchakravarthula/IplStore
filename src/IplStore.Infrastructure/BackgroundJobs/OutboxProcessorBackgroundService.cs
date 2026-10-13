@@ -1,71 +1,49 @@
-﻿using IplStore.Application.Common.Interfaces;
-using IplStore.Infrastructure.Data;
-using Microsoft.EntityFrameworkCore;
+using IplStore.Infrastructure.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using System;
-using System.Collections.Generic;
-using System.Text;
 
+namespace IplStore.Infrastructure.BackgroundJobs;
 
-namespace IplStore.Infrastructure.BackgroundJobs
+/// <summary>Thin loop around <see cref="OutboxProcessor"/> (all the logic, and the tests, live in the processor).</summary>
+public sealed class OutboxProcessorBackgroundService : BackgroundService
 {
-    public class OutboxProcessorBackgroundService : BackgroundService
+    private static readonly TimeSpan IdleDelay = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan ErrorDelay = TimeSpan.FromSeconds(5);
+
+    private readonly IServiceScopeFactory _scopes;
+    private readonly ILogger<OutboxProcessorBackgroundService> _logger;
+
+    public OutboxProcessorBackgroundService(IServiceScopeFactory scopes, ILogger<OutboxProcessorBackgroundService> logger)
     {
-        private readonly IServiceScopeFactory _scopeFactory;
-        private readonly ILogger<OutboxProcessorBackgroundService> _logger;
+        _scopes = scopes;
+        _logger = logger;
+    }
 
-        public OutboxProcessorBackgroundService(
-        IServiceScopeFactory scopeFactory,
-        ILogger<OutboxProcessorBackgroundService> logger)
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        while (!stoppingToken.IsCancellationRequested)
         {
-            _scopeFactory = scopeFactory;
-            _logger = logger;
-        }
-
-        protected override async Task ExecuteAsync(CancellationToken stoppingToken)
-        {
-            while (!stoppingToken.IsCancellationRequested)
+            var delay = IdleDelay;
+            try
             {
-                try
-                {
-                    using var scope = _scopeFactory.CreateScope();
-                    var dbContext = scope.ServiceProvider.GetRequiredService<IApplicationDbContext>();
-                    var publisher = scope.ServiceProvider.GetRequiredService<IMessagePublisher>();
-
-                    var messages = await dbContext.OutboxMessages
-                        .Where(m => m.ProcessedAtUtc == null)
-                        .OrderBy(m => m.CreatedAtUtc)
-                        .Take(20)
-                        .ToListAsync(stoppingToken);
-
-                    foreach (var message in messages)
-                    {
-                        try
-                        {
-                            await publisher.PublishAsync(message.EventType.ToLowerInvariant(), message.Payload, stoppingToken);
-                            message.MarkAsProcessed();
-                        }
-                        catch (Exception ex)
-                        {
-                            _logger.LogError(ex, "Failed to process OutboxMessage ID {Id}", message.Id);
-                            message.MarkAsFailed(ex.Message);
-                        }
-                    }
-
-                    if (messages.Any())
-                    {
-                        await dbContext.SaveChangesAsync(stoppingToken);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Error processing Outbox background service execution loop.");
-                }
-
-                await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
+                using var scope = _scopes.CreateScope();
+                var processor = scope.ServiceProvider.GetRequiredService<OutboxProcessor>();
+                var published = await processor.ProcessBatchAsync(stoppingToken);
+                if (published > 0) delay = TimeSpan.Zero;   // backlog: keep draining without sleeping
             }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Outbox processing loop failed; retrying.");
+                delay = ErrorDelay;
+            }
+
+            try { await Task.Delay(delay, stoppingToken); }
+            catch (OperationCanceledException) { break; }
         }
     }
 }

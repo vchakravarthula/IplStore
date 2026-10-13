@@ -1,6 +1,34 @@
-@IplStore.Api_HostAddress = http://localhost:5212
+@host = http://localhost:5212
 
-GET {{IplStore.Api_HostAddress}}/weatherforecast/
-Accept: application/json
+### 1. Get a dev token (customer or admin)
+# @name login
+POST {{host}}/api/auth/token
+Content-Type: application/json
+
+{ "username": "customer" }
 
 ###
+@token = {{login.response.body.accessToken}}
+
+### 2. Browse / search the catalog (anonymous)
+GET {{host}}/api/products?search=csk&sortBy=price&pageSize=5
+
+### 3. Add to cart (use a product id from the call above)
+POST {{host}}/api/cart/items
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "productId": "00000000-0000-0000-0000-000000000000", "quantity": 2 }
+
+### 4. View cart
+GET {{host}}/api/cart
+Authorization: Bearer {{token}}
+
+### 5. Checkout (retry-safe: reuse the same key to replay)
+POST {{host}}/api/orders/checkout
+Authorization: Bearer {{token}}
+Idempotency-Key: demo-checkout-001
+
+### 6. Order history
+GET {{host}}/api/orders
+Authorization: Bearer {{token}}

@@ -1,110 +1,113 @@
+using System.Text;
+using IplStore.Api.Health;
 using IplStore.Api.Middleware;
-using IplStore.Application.Common.Interfaces;
-using IplStore.Application.Orders.Commands.Checkouts;
-using IplStore.Application.Products.Commands.DeductStock;
-using IplStore.Application.Products.Queries.GetProducts;
+using IplStore.Application;
 using IplStore.Infrastructure;
-using IplStore.Infrastructure.BackgroundJobs;
-using IplStore.Infrastructure.Messaging;
-using IplStore.Infrastructure.Services;
+using IplStore.Infrastructure.Data;
+using IplStore.Infrastructure.Options;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using OpenTelemetry.Logs;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
-using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// 1. Configure OpenTelemetry & Aspire Dashboard Exporter
-const string serviceName = "IplStore.Api";
-var otlpEndpoint = builder.Configuration["OTEL_EXPORTER_OTLP_ENDPOINT"] ?? "http://localhost:4317";
-
-builder.Services.AddOpenTelemetry()
-    .ConfigureResource(resource => resource.AddService(serviceName))
-    .WithTracing(tracing =>
-    {
-        tracing.AddAspNetCoreInstrumentation()
-               .AddHttpClientInstrumentation()
-               .AddOtlpExporter(options => options.Endpoint = new Uri(otlpEndpoint));
-    })
-    .WithMetrics(metrics =>
-    {
-        metrics.AddAspNetCoreInstrumentation()
-               .AddHttpClientInstrumentation()
-               .AddRuntimeInstrumentation()
-               .AddOtlpExporter(options => options.Endpoint = new Uri(otlpEndpoint));
-    });
-
-builder.Logging.AddOpenTelemetry(logging =>
+// ---------- Observability: traces, metrics and logs over OTLP (Aspire Dashboard locally, Azure Monitor in prod) ----------
+if (builder.Configuration.GetValue("Telemetry:Enabled", true))
 {
-    logging.IncludeFormattedMessage = true;
-    logging.IncludeScopes = true;
-    logging.AddOtlpExporter(options => options.Endpoint = new Uri(otlpEndpoint));
-});
+    const string serviceName = "IplStore.Api";
+    var otlp = new Uri(builder.Configuration["OTEL_EXPORTER_OTLP_ENDPOINT"] ?? "http://localhost:4317");
 
-// 2. Exception Handling & Controllers
-builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
-builder.Services.AddProblemDetails();
-builder.Services.AddControllers();
-builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddResponseCaching();
+    builder.Services.AddOpenTelemetry()
+        .ConfigureResource(r => r.AddService(serviceName))
+        .WithTracing(t => t.AddAspNetCoreInstrumentation().AddHttpClientInstrumentation().AddOtlpExporter(o => o.Endpoint = otlp))
+        .WithMetrics(m => m.AddAspNetCoreInstrumentation().AddHttpClientInstrumentation().AddRuntimeInstrumentation()
+            .AddOtlpExporter(o => o.Endpoint = otlp));
 
-// 3. Infrastructure & Services
-builder.Services.AddInfrastructure(builder.Configuration);
-builder.Services.AddSingleton<IMessagePublisher, RabbitMqPublisher>();
-builder.Services.AddScoped<IPaymentGateway, RazorpayPaymentGateway>();
-builder.Services.AddHostedService<OutboxProcessorBackgroundService>();
-
-// 4. CQRS Application Handlers Registration
-builder.Services.AddScoped<GetProductsQueryHandler>();
-builder.Services.AddScoped<DeductStockCommandHandler>();
-builder.Services.AddScoped<CheckoutCommandHandler>();
-
-// 5. Authentication & Authorization Setup
-var jwtSecret = builder.Configuration["JwtSettings:Secret"] ?? "SuperSecretKeyForDevDemoPurposeOnly1234567890!";
-builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-    .AddJwtBearer(options =>
+    builder.Logging.AddOpenTelemetry(o =>
     {
+        o.SetResourceBuilder(ResourceBuilder.CreateDefault().AddService(serviceName));   // logs carry service.name too
+        o.IncludeFormattedMessage = true;
+        o.IncludeScopes = true;
+        o.AddOtlpExporter(x => x.Endpoint = otlp);
+    });
+}
+
+// ---------- Application services ----------
+builder.Services.AddApplication();
+builder.Services.AddInfrastructure(builder.Configuration);
+
+builder.Services.AddProblemDetails();
+builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
+builder.Services.AddControllers();
+builder.Services.AddOpenApi();
+
+// Catalog responses are cached for 30s per distinct query string. (Stock shown may be up to 30s stale;
+// checkout always enforces real stock atomically.)
+builder.Services.AddOutputCache(o =>
+    o.AddPolicy("Catalog", b => b.Expire(TimeSpan.FromSeconds(30)).SetVaryByQuery("*")));
+
+builder.Services.AddCors(o => o.AddDefaultPolicy(p => p
+    .WithOrigins(builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? Array.Empty<string>())
+    .AllowAnyHeader().AllowAnyMethod()));
+
+// ---------- AuthN / AuthZ ----------
+// One source of truth: the validated JwtSettings that AuthController also signs with. No hardcoded fallbacks.
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer();
+builder.Services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme)
+    .Configure<IOptions<JwtSettings>>((options, jwt) =>
+    {
+        options.MapInboundClaims = false;   // keep "sub" and "role" as issued
         options.TokenValidationParameters = new TokenValidationParameters
         {
             ValidateIssuer = true,
+            ValidIssuer = jwt.Value.Issuer,
             ValidateAudience = true,
+            ValidAudience = jwt.Value.Audience,
             ValidateLifetime = true,
             ValidateIssuerSigningKey = true,
-            ValidIssuer = builder.Configuration["JwtSettings:Issuer"] ?? "IplStoreDev",
-            ValidAudience = builder.Configuration["JwtSettings:Audience"] ?? "IplStoreDevAudience",
-            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSecret))
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwt.Value.Secret)),
+            NameClaimType = "sub",
+            RoleClaimType = "role",
+            ClockSkew = TimeSpan.FromSeconds(30)
         };
     });
 
-builder.Services.AddAuthorization(options =>
-{
-    options.FallbackPolicy = new AuthorizationPolicyBuilder()
-        .RequireAuthenticatedUser()
-        .Build();
-});
+builder.Services.AddAuthorizationBuilder()
+    // Secure by default: any endpoint without explicit metadata requires a signed-in user ([AllowAnonymous] opts out).
+    .SetFallbackPolicy(new AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build())
+    .AddPolicy("AdminOnly", p => p.RequireRole("Admin"));
 
-// 6. CORS Configuration for React Frontend
-builder.Services.AddCors(options =>
-{
-    options.AddPolicy("AllowFrontend", policy =>
-        policy.WithOrigins("http://localhost:5173")
-              .AllowAnyHeader()
-              .AllowAnyMethod());
-});
+// ---------- Health ----------
+var healthChecks = builder.Services.AddHealthChecks()
+    .AddCheck<SqlHealthCheck>("sql", tags: new[] { "ready" });
+if (!string.Equals(builder.Configuration["Cart:Store"], "InMemory", StringComparison.OrdinalIgnoreCase))
+    healthChecks.AddCheck<RedisHealthCheck>("redis", tags: new[] { "ready" });
 
 var app = builder.Build();
 
-app.UseExceptionHandler();
-app.UseCors("AllowFrontend");
-app.UseResponseCaching();
+if (builder.Configuration.GetValue("Database:Initialize", false))
+    await DatabaseInitializer.InitializeAsync(app.Services, seed: builder.Configuration.GetValue("Database:Seed", false));
 
+app.UseExceptionHandler();
+
+if (app.Environment.IsDevelopment())
+    app.MapOpenApi().AllowAnonymous();
+
+app.UseCors();
 app.UseAuthentication();
 app.UseAuthorization();
+app.UseOutputCache();
 
 app.MapControllers();
+app.MapHealthChecks("/health/live", new() { Predicate = _ => false }).AllowAnonymous();   // process is up
+app.MapHealthChecks("/health/ready", new() { Predicate = c => c.Tags.Contains("ready") }).AllowAnonymous(); // dependencies are up
 
 app.Run();
+
+// Makes the entry point visible to WebApplicationFactory<Program> in the integration tests.
+public partial class Program { }

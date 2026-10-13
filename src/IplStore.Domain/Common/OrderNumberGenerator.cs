@@ -1,38 +1,34 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Security.Cryptography;
-using System.Text;
+namespace IplStore.Domain.Common;
 
-namespace IplStore.Domain.Common
+public static class OrderNumberGenerator
 {
-    public static class OrderNumberGenerator
+    // Crockford Base32: no I, L, O, U, so numbers are safe to read out over the phone.
+    private const string Alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+    private const int RandomChars = 10; // 50 bits
+
+    /// <summary>
+    /// Derives a short, human-friendly order number from the order's own v7 GUID (50 random bits).
+    /// Not mathematically collision-free (nothing short is) but the odds are negligible;
+    /// the unique index on Orders.ShortOrderNumber is the backstop.
+    /// </summary>
+    public static string From(Guid orderId)
     {
-        private static readonly char[] Base32Chars = "0123456789ABCDEFGHJKMNPQRSTVWXYZ".ToCharArray();
+        Span<byte> bytes = stackalloc byte[16];
+        orderId.TryWriteBytes(bytes, bigEndian: true, out _);
 
-        /// <summary>
-        /// Generates a time-ordered, collision-free short order number (e.g., "IPL-8K2M9X4P").
-        /// </summary>
-        public static string Generate()
+        // v7 layout: bytes 0-5 timestamp, 6-7 version + rand_a, 8-15 variant + rand_b.
+        // Use the low 7 bytes of rand_b (56 bits) and consume 50 of them.
+        ulong bits = 0;
+        for (var i = 9; i < 16; i++)
+            bits = (bits << 8) | bytes[i];
+
+        var chars = new char[RandomChars];
+        for (var i = RandomChars - 1; i >= 0; i--)
         {
-            long timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-
-            // Encode 40-bit timestamp into Base32 (8 characters)
-            char[] charArray = new char[8];
-            for (int i = 7; i >= 0; i--)
-            {
-                charArray[i] = Base32Chars[timestamp & 31];
-                timestamp >>= 5;
-            }
-
-            // Append 2 bytes of cryptographically secure random entropy (3 Base32 chars)
-            byte[] randomBytes = new byte[2];
-            RandomNumberGenerator.Fill(randomBytes);
-
-            int randomVal = (randomBytes[0] << 8) | randomBytes[1];
-            char c1 = Base32Chars[randomVal & 31];
-            char c2 = Base32Chars[(randomVal >> 5) & 31];
-
-            return $"IPL-{new string(charArray)}{c1}{c2}";
+            chars[i] = Alphabet[(int)(bits & 31)];
+            bits >>= 5;
         }
+
+        return "IPL-" + new string(chars);
     }
 }

@@ -11,10 +11,11 @@
 using System;
 using System.Reflection;
 
+[assembly: Microsoft.Extensions.Configuration.UserSecrets.UserSecretsIdAttribute("iplstore-api-dev")]
 [assembly: System.Reflection.AssemblyCompanyAttribute("IplStore.Api")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+358d35d51b90962ac2b149b174c173f900100b46")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+6332ad0f35a6f510bdc726ee64870275a8136528")]
 [assembly: System.Reflection.AssemblyProductAttribute("IplStore.Api")]
 [assembly: System.Reflection.AssemblyTitleAttribute("IplStore.Api")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
